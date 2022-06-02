@@ -1,7 +1,7 @@
 local typedefs = require "kong.db.schema.typedefs"
 
 
-local PLUGIN_NAME = "myplugin"
+local PLUGIN_NAME = "jwt-ext"
 
 
 local schema = {
@@ -14,18 +14,23 @@ local schema = {
         -- The 'config' record is the custom part of the plugin schema
         type = "record",
         fields = {
-          -- a standard defined field (typedef), with some customizations
-          { request_header = typedefs.header_name {
-              required = true,
-              default = "Hello-World" } },
-          { response_header = typedefs.header_name {
-              required = true,
-              default = "Bye-World" } },
-          { ttl = { -- self defined field
-              type = "integer",
-              default = 600,
-              required = true,
-              gt = 0, }}, -- adding a constraint for the value
+          { scopes_claim = { type = "string", default = "scope" }, },
+          { scopes_required = {
+            type = "set",
+            elements = { type = "string" },
+            default = {}
+          }, },
+          { claims_headers =  {
+            type = "array",
+            default = {
+              "iss:x-jwt-iss",
+              "sub:x-jwt-sub",
+              "scope:x-jwt-scope",
+              "_validated_scope:x-jwt-validated-scope"
+            },
+            required = true,
+            elements = { type = "string", match = "^[^:]+:.*$" },
+          }, },
         },
         entity_checks = {
           -- add some validation rules across fields
