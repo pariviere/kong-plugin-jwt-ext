@@ -2,6 +2,7 @@ local jwt_parser = require "kong.plugins.jwt.jwt_parser"
 local utils = require "kong.tools.utils"
 
 local split = utils.split
+local ipairs = ipairs
 
 
 --- Verify the claim requirements

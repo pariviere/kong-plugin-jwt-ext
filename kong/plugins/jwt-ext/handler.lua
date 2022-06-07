@@ -10,94 +10,156 @@
 -- on when exactly they are invoked and what limitations each handler has.
 ---------------------------------------------------------------------------------------------
 
-
+local jwt_decoder_ext = require "kong.plugins.jwt-ext.jwt_parser_ext"
+local tostring = tostring
+local re_gmatch = ngx.re.gmatch
+local match = string.match
+local noop = function() end
 
 local plugin = {
-  PRIORITY = 1000, -- set the plugin priority, which determines plugin execution order
+  PRIORITY = 1004, -- set the plugin priority, which determines plugin execution order
   VERSION = "0.1", -- version in X.Y.Z format. Check hybrid-mode compatibility requirements.
 }
 
 
+local function iter(config_array)
+  if type(config_array) ~= "table" then
+    return noop
+  end
 
--- do initialization here, any module level code runs in the 'init_by_lua_block',
--- before worker processes are forked. So anything you add here will run once,
--- but be available in all workers.
+  return function(config_array, i)
+    i = i + 1
 
+    local header_to_test = config_array[i]
+    if header_to_test == nil then -- n + 1
+      return nil
+    end
 
+    local header_to_test_name, header_to_test_value = match(header_to_test, "^([^:]+):*(.-)$")
+    if header_to_test_value == "" then
+      header_to_test_value = nil
+    end
 
--- handles more initialization, but AFTER the worker process has been forked/created.
--- It runs in the 'init_worker_by_lua_block'
-function plugin:init_worker()
+    return i, header_to_test_name, header_to_test_value
+  end, config_array, 0
+end
 
-  -- your custom code here
-  kong.log.debug("saying hi from the 'init_worker' handler")
+--- Retrieve a JWT in a request.
+-- Checks for the JWT in URI parameters, then in cookies, and finally
+-- in the configured header_names (defaults to `[Authorization]`).
+-- (copy from original jwt plugin)
+-- @param request ngx request object
+-- @param conf Plugin configuration
+-- @return token JWT token contained in request (can be a table) or nil
+-- @return err
+local function retrieve_token(conf)
+  local args = kong.request.get_query()
+  for _, v in ipairs(conf.uri_param_names) do
+    if args[v] then
+      return args[v]
+    end
+  end
 
-end --]]
+  local var = ngx.var
+  for _, v in ipairs(conf.cookie_names) do
+    local cookie = var["cookie_" .. v]
+    if cookie and cookie ~= "" then
+      return cookie
+    end
+  end
 
+  local request_headers = kong.request.get_headers()
+  for _, v in ipairs(conf.header_names) do
+    local token_header = request_headers[v]
+    if token_header then
+      if type(token_header) == "table" then
+        token_header = token_header[1]
+      end
+      local iterator, iter_err = re_gmatch(token_header, "\\s*[Bb]earer\\s+(.+)")
+      if not iterator then
+        kong.log.err(iter_err)
+        break
+      end
 
+      local m, err = iterator()
+      if err then
+        kong.log.err(err)
+        break
+      end
 
---[[ runs in the 'ssl_certificate_by_lua_block'
--- IMPORTANT: during the `certificate` phase neither `route`, `service`, nor `consumer`
--- will have been identified, hence this handler will only be executed if the plugin is
--- configured as a global plugin!
-function plugin:certificate(plugin_conf)
+      if m and #m > 0 then
+        return m[1]
+      end
+    end
+  end
+end
 
-  -- your custom code here
-  kong.log.debug("saying hi from the 'certificate' handler")
+local function set_claims_headers(claims, claims_headers)
+  local set_header = kong.service.request.set_header
+  local clear_header = kong.service.request.clear_header
 
-end --]]
-
-
-
---[[ runs in the 'rewrite_by_lua_block'
--- IMPORTANT: during the `rewrite` phase neither `route`, `service`, nor `consumer`
--- will have been identified, hence this handler will only be executed if the plugin is
--- configured as a global plugin!
-function plugin:rewrite(plugin_conf)
-
-  -- your custom code here
-  kong.log.debug("saying hi from the 'rewrite' handler")
-
-end --]]
+  for _, claim_name, header_name in iter(claims_headers) do
+    local claim_value = claims[claim_name]
+    if  claim_value ~= nil then
+      if type(claim_value) == "table" then
+        set_header(header_name, table.concat(claim_value, ','))
+      else
+        set_header(header_name, claim_value)
+      end
+    else
+      clear_header(header_name)
+    end
+  end
+end
 
 
 
 -- runs in the 'access_by_lua_block'
-function plugin:access(plugin_conf)
+function plugin:access(conf)
+  if #conf.scopes_required == 0 then
+    kong.log.warn("jwt-ext plugin activated but no requirements defined: noop mode")
+    return true
+  end
+  
+  local token, err = retrieve_token(conf)
+  if err then
+    return error(err)
+  end
 
-  -- your custom code here
-  kong.log.inspect(plugin_conf)   -- check the logs for a pretty-printed config!
-  kong.service.request.set_header(plugin_conf.request_header, "this is on a request")
+  local token_type = type(token)
+  if token_type ~= "string" then
+    if token_type == "nil" then
+      return kong.response.exit(401, {message = "Unauthorized" })
+    elseif token_type == "table" then
+      return kong.response.exit(401, {message = "Multiple tokens provided" })
+    else
+      return kong.response.exit(401, {message = "Unrecognizable token" })
+    end
+  end
 
+  -- Decode token to find out who the consumer is
+  local jwt, err = jwt_decoder_ext:new(token)
+
+  if err then
+    return false, { status = 401, message = "Bad token; " .. tostring(err) }
+  end
+
+
+  local claims = jwt.claims
+
+  if #conf.scopes_required > 0 then
+    local ok, filtered_scopes = jwt:validate_scopes(conf.scopes_claim, conf.scopes_required)
+
+    if not ok then
+      return kong.response.exit(401, { message = "Invalid scope" })
+    else
+      claims['_validated_scope'] = table.concat(filtered_scopes, ',')
+    end
+  end
+
+  set_claims_headers(claims, conf.claims_headers)
+
+  return true
 end --]]
 
-
--- runs in the 'header_filter_by_lua_block'
-function plugin:header_filter(plugin_conf)
-
-  -- your custom code here, for example;
-  kong.response.set_header(plugin_conf.response_header, "this is on the response")
-
-end --]]
-
-
---[[ runs in the 'body_filter_by_lua_block'
-function plugin:body_filter(plugin_conf)
-
-  -- your custom code here
-  kong.log.debug("saying hi from the 'body_filter' handler")
-
-end --]]
-
-
---[[ runs in the 'log_by_lua_block'
-function plugin:log(plugin_conf)
-
-  -- your custom code here
-  kong.log.debug("saying hi from the 'log' handler")
-
-end --]]
-
-
--- return our plugin object
 return plugin

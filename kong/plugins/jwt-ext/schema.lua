@@ -14,6 +14,21 @@ local schema = {
         -- The 'config' record is the custom part of the plugin schema
         type = "record",
         fields = {
+          { uri_param_names = {
+            type = "set",
+            elements = { type = "string" },
+            default = { "jwt" },
+          }, },
+          { cookie_names = {
+              type = "set",
+              elements = { type = "string" },
+              default = {}
+          }, },
+          { header_names = {
+            type = "set",
+            elements = { type = "string" },
+            default = { "authorization" },
+          }, },
           { scopes_claim = { type = "string", default = "scope" }, },
           { scopes_required = {
             type = "set",
@@ -31,14 +46,7 @@ local schema = {
             required = true,
             elements = { type = "string", match = "^[^:]+:.*$" },
           }, },
-        },
-        entity_checks = {
-          -- add some validation rules across fields
-          -- the following is silly because it is always true, since they are both required
-          { at_least_one_of = { "request_header", "response_header" }, },
-          -- We specify that both header-names cannot be the same
-          { distinct = { "request_header", "response_header"} },
-        },
+        }
       },
     },
   },
