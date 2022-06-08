@@ -1,17 +1,66 @@
 [![Build Status][badge-travis-image]][badge-travis-url]
 
-Kong plugin template
+Kong jwt-ext plugin
 ====================
 
-This repository contains a very simple Kong plugin template to get you
-up and running quickly for developing your own plugins.
+This repositoriy contains the source code of the Kong `jwt-ext` .
 
-This template was designed to work with the
-[`kong-pongo`](https://github.com/Kong/kong-pongo) and
+The `jwt-ext` plugin is intended to work alongside the [`jwt`](https://docs.konghq.com/hub/kong-inc/jwt/) plugin and allows to :
+
+ - validate scope claims
+ - propage jwt claims as upstream scope
+
+The bundled [`jwt`](https://docs.konghq.com/hub/kong-inc/jwt/) plugin must still be used to verify the JWT token validity, algorithm and signature.
+
+
+Quickstart
+==========
+
+ - Plugin installation:
+   - via `LuaRocks``
+   - or by making the repository root directory added in `KONG_LUA_PACKAGE_PATH`
+ - Load plugin in Kong by adding `jwt-ext` to `KONG_PLUGINS` and reload Kong instance
+ - Configure your service / router to use the `jwt-ext` plugin
+
+
+For example, 
+
+```yaml
+_format_version: "1.1"
+consumers:
+  - username: custom
+    algorithm: HS256
+    secret: mysecretjwtsecret
+services:
+  - name: mockbin-request
+    url: http://mockbin.org/request
+    routes:
+    - name: request
+      paths:
+        - /request
+    plugins:
+      - name: jwt
+        enabled: true
+        config:
+          anonymous: anonymous
+          key_claim_name: iss
+          claims_to_verify:
+            - exp
+      - name: jwt-ext
+        enabled: true
+        config:
+          scopes_claim: scope
+          scopes_required: ['haveacess']
+```
+
+
+
+
+Development
+============
+
+It is built with the [Kong Plugin Template](https://github.com/Kong/kong-plugin) and work with the [`kong-pongo`](https://github.com/Kong/kong-pongo) and
 [`kong-vagrant`](https://github.com/Kong/kong-vagrant) development environments.
-
-Please check out those repos `README` files for usage instructions. For a complete
-walkthrough check [this blogpost on the Kong website](https://konghq.com/blog/custom-lua-plugin-kong-gateway).
 
 
 Naming and versioning conventions
