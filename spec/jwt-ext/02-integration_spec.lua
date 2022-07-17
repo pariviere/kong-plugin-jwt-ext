@@ -37,7 +37,7 @@ jwt_allowed_scope_as_string = {
 jwt_contains_allowed_scope_as_string = {
   iss = issuer_claim,
   sub = sub_claim,
-  scope = allowed_scope .. unknow_scope
+  scope = allowed_scope .. " ".. unknow_scope
 }
 
 jwt_contains_allowed_scope_as_array = {
@@ -70,7 +70,7 @@ for _, strategy in helpers.all_strategies() do
 
     lazy_setup(function()
 
-      local bp = helpers.get_db_utils(strategy == "off" and "postgres" or strategy, nil, { PLUGIN_NAME })
+      local bp = helpers.get_db_utils(strategy == "off" and "postgres" or strategy, nil, { PLUGIN_NAME,  })
 
 
       -- route1: test1.com
@@ -139,23 +139,64 @@ for _, strategy in helpers.all_strategies() do
       local route5 = bp.routes:insert({
         hosts = { "test5.com"},
       })
-      bp.plugins:insert {
-        name = PLUGIN_NAME,
-        route = { id = route5.id },
-        config = {
-          scopes_required= { allowed_scope }
-        },
-      }
-      consumer1   = bp.consumers:insert({ username = "jwt_tests_consumer" })
-      consumer1_jwt_secret        = bp.jwt_secrets:insert { consumer = { id = consumer1.id } }
-      consumer1_jwt_secret_secret = consumer1_jwt_secret.secret
-      consumer1_jwt_secret_key    = consumer1_jwt_secret.key
+
+      local jwt_consumer      = bp.consumers:insert({ username = "jwt_consumer" })
+      jwt_consumer_jwt_secret = bp.jwt_secrets:insert { consumer = { id = jwt_consumer.id } }
 
       bp.plugins:insert({
         name     = "jwt",
         route = { id = route5.id },
-        config   = {header_names = { "authorization" }, key_claim_name = "iss"},
+        config   = { key_claim_name = "kid" },
       })
+
+      bp.plugins:insert {
+        name = PLUGIN_NAME,
+        route = { id = route5.id },
+        config = {
+          scopes_required= { allowed_scope },
+          claims_headers = {
+            "iss:x-renamed-iss",
+            "sub:x-renamed-sub",
+            "scope:x-renamed-scope",
+            "_validated_scope:x-renamed-validated-scope"
+          },
+        },
+      }
+
+      -- route6: test6.com
+      -- jwt plugin is required to validate access
+      -- before jwt-ext plugin
+      -- basicauth should also works
+      local route6 = bp.routes:insert({
+        hosts = { "test6.com"},
+      })
+
+
+      bp.plugins:insert({
+        name     = "jwt",
+        route = { id = route6.id },
+        config   = { key_claim_name = "kid" },
+      })
+
+      bp.plugins:insert {
+        name = PLUGIN_NAME,
+        route = { id = route6.id },
+        config = {
+          scopes_required= { allowed_scope },
+          claims_headers = {
+            "iss:x-renamed-iss",
+            "sub:x-renamed-sub",
+            "scope:x-renamed-scope",
+            "_validated_scope:x-renamed-validated-scope"
+          },
+        },
+      }
+
+      bp.plugins:insert {
+        name    = "basic-auth",
+        route = { id = route6.id },
+
+      }
 
 
       -- start kong
@@ -333,6 +374,8 @@ for _, strategy in helpers.all_strategies() do
       end)
     end)
 
+    
+
     describe("#test5.com", function()
       local target_host = "test5.com"
 
@@ -346,32 +389,45 @@ for _, strategy in helpers.all_strategies() do
       end)
 
       it("is forbidden if token is not verified by jwt plugin", function()
-        for index, jwt_token in pairs({jwt_contains_allowed_scope_as_string, jwt_contains_allowed_scope_as_array, jwt_unknow_scope_as_array, jwt_unknow_scope_as_string}) do
+        for index, jwt_token in pairs({jwt_allowed_scope_as_string,jwt_allowed_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, "badsecret", "HS256", header)
+          local authorization = "Bearer " .. jwt
           local r = client:get("/request", {
-            headers= {
+            headers = {
               host = target_host,
-              authorization = bearer_header(jwt_token)
+              authorization = authorization
             }
           })
-
-          assert.response(r).has.status(401)
+          assert.response(r).has.status(401)                 
         end
       end)
 
-      it("is allowed if token is verified by jwt and jwt-ext plugin", function()
-
-        for index, jwt_token in pairs({jwt_contains_allowed_scope_as_string, jwt_contains_allowed_scope_as_array}) do
-          jwt_token.iss = consumer1_jwt_secret_key
-
-          local customize_token = jwt_encoder.encode(jwt_token, consumer1_jwt_secret_secret)
+      it("#current is allowed if token is verified by jwt and jwt-ext plugin", function()
+        for index, jwt_token in pairs({jwt_allowed_scope_as_string,jwt_allowed_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, jwt_consumer_jwt_secret.secret, "HS256", header)
+          local authorization = "Bearer " .. jwt
           local r = client:get("/request", {
-            headers= {
+            headers = {
               host = target_host,
-              authorization = customize_token
+              authorization = authorization
             }
           })
-          -- FIXME: should be 200
-          assert.response(r).has.status(200)
+          assert.response(r).has.status(200)                 
+        end
+
+        for index, jwt_token in pairs({jwt_unknow_scope_as_string,jwt_unknow_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, jwt_consumer_jwt_secret.secret, "HS256", header)
+          local authorization = "Bearer " .. jwt
+          local r = client:get("/request", {
+            headers = {
+              host = target_host,
+              authorization = authorization
+            }
+          })
+          assert.response(r).has.status(401)                 
         end
       end)
     end)
