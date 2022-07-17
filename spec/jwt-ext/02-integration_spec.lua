@@ -166,16 +166,18 @@ for _, strategy in helpers.all_strategies() do
       -- route6: test6.com
       -- jwt plugin is required to validate access
       -- before jwt-ext plugin
-      -- basicauth should also works
+      -- with anonymous support
       local route6 = bp.routes:insert({
         hosts = { "test6.com"},
       })
+
+      local anonymous_user = bp.consumers:insert({ username = "no-body" })
 
 
       bp.plugins:insert({
         name     = "jwt",
         route = { id = route6.id },
-        config   = { key_claim_name = "kid" },
+        config   = { key_claim_name = "kid", anonymous = anonymous_user.id},
       })
 
       bp.plugins:insert {
@@ -183,6 +185,7 @@ for _, strategy in helpers.all_strategies() do
         route = { id = route6.id },
         config = {
           scopes_required= { allowed_scope },
+          anonymous = anonymous_user.id,
           claims_headers = {
             "iss:x-renamed-iss",
             "sub:x-renamed-sub",
@@ -191,13 +194,6 @@ for _, strategy in helpers.all_strategies() do
           },
         },
       }
-
-      bp.plugins:insert {
-        name    = "basic-auth",
-        route = { id = route6.id },
-
-      }
-
 
       -- start kong
       assert(helpers.start_kong({
@@ -428,6 +424,63 @@ for _, strategy in helpers.all_strategies() do
             }
           })
           assert.response(r).has.status(401)                 
+        end
+      end)
+    end)
+
+
+    describe("#test6.com", function()
+      local target_host = "test6.com"
+
+      it("is allowed without token", function()
+        local r = client:get("/request", {
+          headers = {
+            host = target_host
+          }
+        })
+        assert.response(r).has.status(200)
+      end)
+
+      it("is allowed if token is not verified by jwt plugin", function()
+        for index, jwt_token in pairs({jwt_allowed_scope_as_string,jwt_allowed_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, "badsecret", "HS256", header)
+          local authorization = "Bearer " .. jwt
+          local r = client:get("/request", {
+            headers = {
+              host = target_host,
+              authorization = authorization
+            }
+          })
+          assert.response(r).has.status(200)                 
+        end
+      end)
+
+      it("is allowed if token is verified by jwt and jwt-ext plugin", function()
+        for index, jwt_token in pairs({jwt_allowed_scope_as_string,jwt_allowed_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, jwt_consumer_jwt_secret.secret, "HS256", header)
+          local authorization = "Bearer " .. jwt
+          local r = client:get("/request", {
+            headers = {
+              host = target_host,
+              authorization = authorization
+            }
+          })
+          assert.response(r).has.status(200)                 
+        end
+
+        for index, jwt_token in pairs({jwt_unknow_scope_as_string,jwt_unknow_scope_as_array}) do
+          local header = {typ = "JWT", alg = "HS256", kid = jwt_consumer_jwt_secret.key}
+          local jwt = jwt_encoder.encode(jwt_token, jwt_consumer_jwt_secret.secret, "HS256", header)
+          local authorization = "Bearer " .. jwt
+          local r = client:get("/request", {
+            headers = {
+              host = target_host,
+              authorization = authorization
+            }
+          })
+          assert.response(r).has.status(200)                 
         end
       end)
     end)

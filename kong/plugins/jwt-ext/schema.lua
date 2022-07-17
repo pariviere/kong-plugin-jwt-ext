@@ -46,6 +46,7 @@ local schema = {
             required = true,
             elements = { type = "string", match = "^[^:]+:.*$" },
           }, },
+          { anonymous = { type = "string" }, },
         }
       },
     },

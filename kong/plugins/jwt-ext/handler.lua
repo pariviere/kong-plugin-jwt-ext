@@ -9,7 +9,7 @@
 -- The handlers are based on the OpenResty handlers, see the OpenResty docs for details
 -- on when exactly they are invoked and what limitations each handler has.
 ---------------------------------------------------------------------------------------------
-
+local constants = require "kong.constants"
 local jwt_decoder_ext = require "kong.plugins.jwt-ext.jwt_parser_ext"
 local tostring = tostring
 local re_gmatch = ngx.re.gmatch
@@ -112,10 +112,33 @@ local function set_claims_headers(claims, claims_headers)
   end
 end
 
+local function set_consumer(consumer)
+  kong.client.authenticate(consumer, nil)
+
+  local set_header = kong.service.request.set_header
+  local clear_header = kong.service.request.clear_header
+
+  if consumer and consumer.id then
+    set_header(constants.HEADERS.CONSUMER_ID, consumer.id)
+  else
+    clear_header(constants.HEADERS.CONSUMER_ID)
+  end
+
+  if consumer and consumer.custom_id then
+    set_header(constants.HEADERS.CONSUMER_CUSTOM_ID, consumer.custom_id)
+  else
+    clear_header(constants.HEADERS.CONSUMER_CUSTOM_ID)
+  end
+
+  if consumer and consumer.username then
+    set_header(constants.HEADERS.CONSUMER_USERNAME, consumer.username)
+  else
+    clear_header(constants.HEADERS.CONSUMER_USERNAME)
+  end
+end
 
 
--- runs in the 'access_by_lua_block'
-function plugin:access(conf)
+local function process_jwt(conf)
   if #conf.scopes_required == 0 then
     kong.log.warn("jwt-ext plugin activated but no requirements defined: noop mode")
     return true
@@ -129,11 +152,11 @@ function plugin:access(conf)
   local token_type = type(token)
   if token_type ~= "string" then
     if token_type == "nil" then
-      return kong.response.exit(401, {message = "Unauthorized" })
+      return false, { status = 401, message = "Unauthorized" }
     elseif token_type == "table" then
-      return kong.response.exit(401, {message = "Multiple tokens provided" })
+      return false , { status = 401, message = "Multiple tokens provided" }
     else
-      return kong.response.exit(401, {message = "Unrecognizable token" })
+      return false, { status = 401, message = "Unrecognizable token" }
     end
   end
 
@@ -151,7 +174,7 @@ function plugin:access(conf)
     local ok, filtered_scopes = jwt:validate_scopes(conf.scopes_claim, conf.scopes_required)
 
     if not ok then
-      return kong.response.exit(401, { message = "Invalid scope" })
+        return false, { status = 401, message = "Invalid scope" }
     else
       claims['_validated_scope'] = table.concat(filtered_scopes, ',')
     end
@@ -160,6 +183,39 @@ function plugin:access(conf)
   set_claims_headers(claims, conf.claims_headers)
 
   return true
+end
+
+
+-- runs in the 'access_by_lua_block'
+function plugin:access(conf)
+  if conf.anonymous and kong.client.get_credential() then
+    -- we're already authenticated, and we're configured for using anonymous,
+    -- hence we're in a logical OR between auth methods and we're already done.
+    return
+  end
+
+
+  local ok, err = process_jwt(conf)
+  if not ok then
+    if conf.anonymous then
+      -- get anonymous user
+      local consumer_cache_key = kong.db.consumers:cache_key(conf.anonymous)
+      local consumer, err      = kong.cache:get(consumer_cache_key, nil,
+                                                kong.client.load_consumer,
+                                                conf.anonymous, true)
+      if err then
+        return error(err)
+      end
+
+      set_consumer(consumer)
+
+    else
+      return kong.response.exit(err.status, err.errors or { message = err.message })
+    end
+  else
+    return true
+  end
+
 end --]]
 
 return plugin

@@ -78,6 +78,9 @@ Plugin Configuration
 | scopes_claim | The name of claims which must be validated.<br>Defaults to `scope` |
 | scopes_required | <p>The scopes (<code>scopes_claim</code> claim) required to be present in the access token (or introspection results) for successful authorization. This config parameter works in both AND / OR cases.<ul><li>When <code>["scope1 scope2"]</code> are in the same array indices, both scope1 AND scope2 need to be present in access token (or introspection results).</li><li> When <code>["scope1", "scope2"]</code> are in different array indices, either scope1 OR scope2 need to be present in access token (or introspection results)</li></ul></p><p>It tries to mimic the scope claims validation rules of the [Kong Entreprise OpenID Connect Plugin](https://docs.konghq.com/hub/kong-inc/openid-connect/#claims-based-authorization) |
 | claims_headers | A mapping between token claims and upstream headers.<br>Defaults to <code>["iss:x-jwt-iss", "sub:x-jwt-sub", "scope:x-jwt-scope", "_validated_scope:x-jwt-validated-scope"</code><br><br>The `_validated_scope` is a dynamic claims added by the plugin and  which contains the list of scope contained in `scopes_claim` and matching `scopes_required` rules handled by the plugin and contains the matching  |
+| anonymous | An optional string (consumer uuid) value to use as an anonymous consumer if authentication fails. If empty (default), the request will fail with an authentication failure 4xx. The anonymous value must refer to the Consumer id attribute that is internal to Kong, and not its custom_id. |
+
+
 
 
 Development
