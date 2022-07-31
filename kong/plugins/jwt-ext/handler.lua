@@ -188,12 +188,11 @@ end
 
 -- runs in the 'access_by_lua_block'
 function plugin:access(conf)
-  if conf.anonymous and kong.client.get_credential() then
-    -- we're already authenticated, and we're configured for using anonymous,
+  if conf.anonymous and kong.client.get_credential() and not kong.ctx.shared.authenticated_jwt_token then
+    -- we're already authenticated and NOT with jwt plugin, and we're configured for using anonymous,
     -- hence we're in a logical OR between auth methods and we're already done.
     return
   end
-
 
   local ok, err = process_jwt(conf)
   if not ok then
